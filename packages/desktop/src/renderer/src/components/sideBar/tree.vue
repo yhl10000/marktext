@@ -1,7 +1,12 @@
 <template>
-  <div class="tree-view">
+  <div
+    ref="treeViewRef"
+    class="tree-view"
+    :class="hasProject ? 'has-project' : 'no-project'"
+  >
     <div
       v-if="openedFilesInSidebar"
+      ref="openedFilesSectionRef"
       class="opened-files"
     >
       <div class="title">
@@ -53,6 +58,7 @@
       <div
         v-show="showOpenedFiles"
         class="opened-files-list"
+        :style="hasProject ? { height: `${openedFilesRenderedHeight}px` } : undefined"
       >
         <transition-group name="list">
           <opened-file
@@ -63,6 +69,21 @@
         </transition-group>
       </div>
     </div>
+
+    <div
+      v-if="hasProject && openedFilesInSidebar && showOpenedFiles && tabCount > MIN_VISIBLE_ROWS"
+      class="splitter"
+      role="separator"
+      aria-orientation="horizontal"
+      tabindex="0"
+      :aria-valuenow="openedFilesRenderedHeight"
+      :aria-valuemin="MIN_OPENED_FILES_HEIGHT"
+      :aria-valuemax="Number.isFinite(viewportLimit) ? viewportLimit : undefined"
+      :aria-label="t('sideBar.tree.openedFiles')"
+      @mousedown="handleSplitterMouseDown"
+      @dblclick="resetOpenedFilesHeight"
+      @keydown="handleSplitterKeydown"
+    />
 
     <div
       v-if="projectTree"
@@ -175,6 +196,14 @@ import { PATH_SEPARATOR } from '@/config'
 import { isMac } from '@/util'
 import { computeRevealScrollTop } from '@/util/revealTreeRow'
 import {
+  DEFAULT_OPENED_FILES_HEIGHT,
+  MIN_OPENED_FILES_HEIGHT,
+  MIN_VISIBLE_ROWS,
+  OPENED_FILES_TITLE_HEIGHT,
+  computeRenderedHeight,
+  computeViewportLimit
+} from '@/util/sidebarLayout'
+import {
   isEditableTarget,
   isInsideTreeScope,
   isNameInput,
@@ -194,6 +223,10 @@ const props = defineProps<{
 }>()
 
 const depth = 0
+const hasProject = computed(() => !!props.projectTree)
+const treeViewRef = ref<HTMLDivElement | null>(null)
+const openedFilesSectionRef = ref<HTMLDivElement | null>(null)
+const tabCount = computed(() => props.tabs?.length ?? 0)
 // Switching views remounts the tree; persist section expansion across those
 // remounts and app restarts (#2421).
 const SHOW_DIRECTORIES_KEY = 'side-bar-show-directories'
@@ -218,6 +251,74 @@ const { activeItem } = storeToRefs(projectStore)
 const { renameCache } = storeToRefs(projectStore)
 const { nameInputValue } = storeToRefs(projectStore)
 const { openedFilesInSidebar } = storeToRefs(preferencesStore)
+const { openedFilesHeight } = storeToRefs(layoutStore)
+// Keep the requested height independent so a smaller viewport cannot overwrite the user's choice.
+const requestedOpenedFilesHeight = ref(openedFilesHeight.value)
+const viewportLimit = ref(Infinity)
+const openedFilesRenderedHeight = computed(() =>
+  computeRenderedHeight(requestedOpenedFilesHeight.value, viewportLimit.value)
+)
+
+watch(openedFilesHeight, height => {
+  requestedOpenedFilesHeight.value = height
+})
+
+const updateViewportLimit = (): void => {
+  const view = treeViewRef.value
+  const section = openedFilesSectionRef.value
+  if (!view || !section) return
+  const sectionTop = section.getBoundingClientRect().top - view.getBoundingClientRect().top
+  viewportLimit.value = computeViewportLimit(view.clientHeight, sectionTop + OPENED_FILES_TITLE_HEIGHT)
+}
+
+watch(showOpenedFiles, () => nextTick(updateViewportLimit))
+watch(openedFilesSectionRef, () => nextTick(updateViewportLimit))
+
+let resizeObserver: ResizeObserver | undefined
+let startY = 0
+let startHeight = 0
+
+const stopDragging = (): void => {
+  document.removeEventListener('mousemove', handleSplitterMouseMove)
+  document.removeEventListener('mouseup', handleSplitterMouseUp)
+}
+
+const handleSplitterMouseMove = (event: MouseEvent): void => {
+  requestedOpenedFilesHeight.value = Math.max(
+    MIN_OPENED_FILES_HEIGHT,
+    startHeight + (event.clientY - startY)
+  )
+}
+
+const handleSplitterMouseUp = (): void => {
+  layoutStore.SET_OPENED_FILES_HEIGHT(requestedOpenedFilesHeight.value)
+  stopDragging()
+}
+
+const handleSplitterMouseDown = (event: MouseEvent): void => {
+  event.preventDefault()
+  updateViewportLimit()
+  startY = event.clientY
+  startHeight = openedFilesRenderedHeight.value
+  document.addEventListener('mousemove', handleSplitterMouseMove)
+  document.addEventListener('mouseup', handleSplitterMouseUp)
+}
+
+const resetOpenedFilesHeight = (): void => {
+  requestedOpenedFilesHeight.value = DEFAULT_OPENED_FILES_HEIGHT
+  layoutStore.SET_OPENED_FILES_HEIGHT(DEFAULT_OPENED_FILES_HEIGHT)
+}
+
+const handleSplitterKeydown = (event: KeyboardEvent): void => {
+  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+  event.preventDefault()
+  const offset = event.key === 'ArrowUp' ? -20 : 20
+  requestedOpenedFilesHeight.value = Math.max(
+    MIN_OPENED_FILES_HEIGHT,
+    requestedOpenedFilesHeight.value + offset
+  )
+  layoutStore.SET_OPENED_FILES_HEIGHT(requestedOpenedFilesHeight.value)
+}
 
 // The create cache is empty when no input is shown.
 const createCacheDirname = computed<string | undefined>(() => {
@@ -402,7 +503,6 @@ const handleTreeKeydown = (event: KeyboardEvent): void => {
     event.preventDefault()
     event.stopPropagation()
     if (!event.repeat) bus.emit('SIDEBAR::remove')
-    return
   }
 }
 
@@ -427,6 +527,9 @@ watch(
 )
 
 onMounted(() => {
+  updateViewportLimit()
+  resizeObserver = new ResizeObserver(updateViewportLimit)
+  if (treeViewRef.value) resizeObserver.observe(treeViewRef.value)
   bus.on('SIDEBAR::show-new-input', handleInputFocus)
   bus.on('SIDEBAR::focus-tree', focusTree)
   bus.on('SIDEBAR::reveal-path', handleRevealPath)
@@ -439,6 +542,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  resizeObserver?.disconnect()
+  stopDragging()
   bus.off('SIDEBAR::show-new-input', handleInputFocus)
   bus.off('SIDEBAR::focus-tree', focusTree)
   bus.off('SIDEBAR::reveal-path', handleRevealPath)
@@ -512,14 +617,64 @@ onUnmounted(() => {
 .opened-files {
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 .default-cursor {
   cursor: pointer;
 }
 .opened-files .opened-files-list {
-  max-height: 112px;
   overflow: auto;
   flex: 1;
+  min-height: 0;
+}
+
+.tree-view.has-project .opened-files {
+  flex: 0 0 auto;
+}
+
+.tree-view.has-project .opened-files .opened-files-list {
+  flex: 0 0 auto;
+}
+
+.tree-view.no-project .opened-files,
+.tree-view.no-project .opened-files .opened-files-list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.splitter {
+  position: relative;
+  height: 6px;
+  cursor: row-resize;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* Widens the grab area past the hairline without taking layout space. */
+.splitter::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 0;
+  right: 0;
+  height: 16px;
+}
+
+.splitter::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--itemBgColor);
+}
+
+.splitter:hover::after,
+.splitter:focus-visible::after {
+  top: 1px;
+  height: 3px;
+  background: var(--highlightThemeColor);
 }
 
 .opened-files .opened-files-list::-webkit-scrollbar:vertical {
@@ -572,12 +727,17 @@ onUnmounted(() => {
   opacity: 1;
 }
 .open-project {
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  justify-content: space-around;
   align-items: center;
-  padding-bottom: 100px;
+  padding: 8px 0 12px;
+}
+/* With an opened-files section above it, that section takes the free space and
+   pushes the button down. Without one, the button has to reach the bottom on
+   its own. */
+.open-project:only-child {
+  margin-top: auto;
 }
 
 .open-project .centered-group {
