@@ -1,6 +1,7 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import bus from '../bus'
+import { OPENED_FILES_HEIGHT_KEY, normalizeOpenedFilesHeight } from '../util/sidebarLayout'
 import { usePreferencesStore } from './preferences'
 import { debouncedSendBufferedState } from './bufferedState'
 import type { LayoutState } from '@shared/types/preferences'
@@ -10,6 +11,7 @@ interface LayoutPartial {
   showSideBar?: boolean
   showTabBar?: boolean
   sideBarWidth?: number | string
+  openedFilesHeight?: number | string
 }
 
 interface SetLayoutOptions {
@@ -26,6 +28,7 @@ interface BufferedLayout {
   showSideBar: boolean
   showTabBar: boolean
   sideBarWidth: number
+  openedFilesHeight: number
 }
 
 const createBufferedLayoutState = (state: unknown): BufferedLayout | null => {
@@ -39,12 +42,14 @@ const createBufferedLayoutState = (state: unknown): BufferedLayout | null => {
     rightColumn: s.rightColumn,
     showSideBar: !!s.showSideBar,
     showTabBar: !!s.showTabBar,
-    sideBarWidth: normalizeSideBarWidth(s.sideBarWidth)
+    sideBarWidth: normalizeSideBarWidth(s.sideBarWidth),
+    openedFilesHeight: normalizeOpenedFilesHeight(s.openedFilesHeight)
   }
 }
 
 const initialWidth = localStorage.getItem('side-bar-width')
 const initialSideBarWidth = normalizeSideBarWidth(initialWidth)
+const initialOpenedFilesHeight = normalizeOpenedFilesHeight(localStorage.getItem(OPENED_FILES_HEIGHT_KEY))
 
 export const useLayoutStore = defineStore('layout', () => {
   const preferencesStore = usePreferencesStore()
@@ -53,6 +58,7 @@ export const useLayoutStore = defineStore('layout', () => {
   const showSideBar = ref(false)
   const showTabBar = ref(false)
   const sideBarWidth = ref<number>(initialSideBarWidth)
+  const openedFilesHeight = ref<number>(initialOpenedFilesHeight)
 
   const effectiveSideBarWidth = computed<number>(() => {
     return showSideBar.value ? Number(sideBarWidth.value) : 0
@@ -90,7 +96,8 @@ export const useLayoutStore = defineStore('layout', () => {
       rightColumn: rightColumn.value,
       showSideBar: showSideBar.value,
       showTabBar: showTabBar.value,
-      sideBarWidth: sideBarWidth.value
+      sideBarWidth: sideBarWidth.value,
+      openedFilesHeight: openedFilesHeight.value
     })
   }
 
@@ -99,6 +106,7 @@ export const useLayoutStore = defineStore('layout', () => {
     if (!layout) return
 
     SET_SIDE_BAR_WIDTH(layout.sideBarWidth, { scheduleBufferUpdate: false })
+    SET_OPENED_FILES_HEIGHT(layout.openedFilesHeight, { scheduleBufferUpdate: false })
     SET_LAYOUT(
       {
         rightColumn: layout.rightColumn,
@@ -133,6 +141,18 @@ export const useLayoutStore = defineStore('layout', () => {
     const normalizedWidth = normalizeSideBarWidth(width)
     localStorage.setItem('side-bar-width', String(normalizedWidth))
     sideBarWidth.value = normalizedWidth
+    if (scheduleBufferUpdate) {
+      debouncedSendBufferedState()
+    }
+  }
+
+  function SET_OPENED_FILES_HEIGHT(
+    height: number | string,
+    { scheduleBufferUpdate = true }: SetLayoutOptions = {}
+  ): void {
+    const normalizedHeight = normalizeOpenedFilesHeight(height)
+    localStorage.setItem(OPENED_FILES_HEIGHT_KEY, String(normalizedHeight))
+    openedFilesHeight.value = normalizedHeight
     if (scheduleBufferUpdate) {
       debouncedSendBufferedState()
     }
@@ -184,12 +204,14 @@ export const useLayoutStore = defineStore('layout', () => {
     showSideBar,
     showTabBar,
     sideBarWidth,
+    openedFilesHeight,
     effectiveSideBarWidth,
     SET_LAYOUT,
     CREATE_BUFFERED_STATE,
     RESTORE_BUFFERED_STATE,
     TOGGLE_LAYOUT_ENTRY,
     SET_SIDE_BAR_WIDTH,
+    SET_OPENED_FILES_HEIGHT,
     LISTEN_FOR_LAYOUT,
     DISPATCH_LAYOUT_MENU_ITEMS
   }
