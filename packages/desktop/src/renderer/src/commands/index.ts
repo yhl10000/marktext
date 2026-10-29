@@ -1,6 +1,5 @@
 import bus from '../bus'
 import { delay, isMac } from '@/util'
-import { isUpdatable } from './utils'
 import getCommandDescriptionById from './descriptions'
 import { t } from '../i18n'
 
@@ -653,16 +652,6 @@ const commands: CommandDescriptor[] = [
   }
 ]
 
-
-if (isUpdatable()) {
-  commands.push({
-    id: 'file.check-update',
-    description: getCommandDescriptionById('file.check-update'),
-    execute: async() => {
-      window.electron.ipcRenderer.send('mt::check-for-update')
-    }
-  })
-}
 
 if (isMac) {
   commands.push({
